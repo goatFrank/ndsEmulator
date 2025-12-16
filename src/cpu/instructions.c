@@ -1000,7 +1000,7 @@ format_2:
         if (! logical) {
             arm9_set_flag_c(cpu, carry);
             arm9_set_flag_v(cpu, overflow);
-        } else if (op >= 0x2 && op <= 0x4 || op == 0x7) {
+        } else if ((op >= 0x2 && op <= 0x4) || op == 0x7) {
             arm9_set_flag_c(cpu, carry);
         }
         return;
@@ -1305,9 +1305,27 @@ format_2:
 }
 
 // ============================================================================
-// ARM7 Implementations (same logic, different CPU struct)
+// ARM7 Implementations
 // ============================================================================
 
-// TODO
-// void execute_arm_arm7(ARM7* cpu, uint32_t instr) {
+void execute_arm_arm7(ARM7* cpu, uint32_t instr) {
+    // Per ora usa la stessa logica di ARM9 (semplificato)
+    // In un'implementazione completa ci sarebbero alcune differenze
+
+    (void)cpu;
+    (void)instr;
+
+    // TODO: Implementare le istruzioni ARM7-specifiche
+    // Per ora è un placeholder che non fa nulla
+}
+
+void execute_thumb_arm7(ARM7* cpu, uint16_t instr) {
+    // Per ora usa la stessa logica di ARM9 (semplificato)
+
+    (void)cpu;
+    (void)instr;
+
+    // TODO: Implementare le istruzioni THUMB per ARM7
+    // Per ora è un placeholder che non fa nulla
     // Implementazione semplificata - stessa logica dell
+}

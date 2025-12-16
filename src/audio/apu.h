@@ -42,7 +42,7 @@ typedef struct APU {
     APUChannel  channels[APU_CHANNELS];
     bool        master_enable;
     uint8_t     master_volume;
-    uint8_t     output_bias;
+    uint16_t     output_bias;
     int16_t     buffer_left[APU_BUFFER_SIZE];
     int16_t     buffer_right[APU_BUFFER_SIZE];
     uint32_t    buffer_pos;
