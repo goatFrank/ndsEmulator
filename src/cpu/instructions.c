@@ -1308,24 +1308,316 @@ format_2:
 // ARM7 Implementations
 // ============================================================================
 
-void execute_arm_arm7(ARM7* cpu, uint32_t instr) {
-    // Per ora usa la stessa logica di ARM9 (semplificato)
-    // In un'implementazione completa ci sarebbero alcune differenze
+// ============================================================================
+// ARM7 - Check Condition
+// ============================================================================
 
-    (void)cpu;
-    (void)instr;
+static bool check_condition_arm7(ARM7* cpu, uint8_t cond) {
+    bool n = arm7_get_flag_n(cpu);
+    bool z = arm7_get_flag_z(cpu);
+    bool c = arm7_get_flag_c(cpu);
+    bool v = arm7_get_flag_v(cpu);
 
-    // TODO: Implementare le istruzioni ARM7-specifiche
-    // Per ora è un placeholder che non fa nulla
+    switch (cond) {
+        case 0x0: return z;
+        case 0x1: return ! z;
+        case 0x2: return c;
+        case 0x3: return !c;
+        case 0x4: return n;
+        case 0x5: return !n;
+        case 0x6: return v;
+        case 0x7: return !v;
+        case 0x8: return c && ! z;
+        case 0x9: return !c || z;
+        case 0xA: return n == v;
+        case 0xB: return n != v;
+        case 0xC: return ! z && (n == v);
+        case 0xD:  return z || (n != v);
+        case 0xE: return true;
+        case 0xF: return true;
+        default: return false;
+    }
 }
 
+// ============================================================================
+// ARM7 Flag Helpers
+// ============================================================================
+
+static inline void arm7_set_flag_n(ARM7* cpu, bool v) {
+    cpu->cpsr = v ? (cpu->cpsr | FLAG_N) : (cpu->cpsr & ~FLAG_N);
+}
+static inline void arm7_set_flag_z(ARM7* cpu, bool v) {
+    cpu->cpsr = v ? (cpu->cpsr | FLAG_Z) : (cpu->cpsr & ~FLAG_Z);
+}
+static inline void arm7_set_flag_c(ARM7* cpu, bool v) {
+    cpu->cpsr = v ?  (cpu->cpsr | FLAG_C) : (cpu->cpsr & ~FLAG_C);
+}
+static inline void arm7_set_flag_v(ARM7* cpu, bool v) {
+    cpu->cpsr = v ? (cpu->cpsr | FLAG_V) : (cpu->cpsr & ~FLAG_V);
+}
+
+// ============================================================================
+// ARM7 - Data Processing
+// ============================================================================
+
+static void arm7_data_processing(ARM7* cpu, uint32_t instr) {
+    uint8_t opcode = (instr >> 21) & 0xF;
+    bool set_flags = (instr >> 20) & 1;
+    uint8_t rn = (instr >> 16) & 0xF;
+    uint8_t rd = (instr >> 12) & 0xF;
+
+    uint32_t operand2;
+    bool shift_carry = arm7_get_flag_c(cpu);
+
+    if (instr & (1 << 25)) {
+        uint32_t imm = instr & 0xFF;
+        uint8_t rotate = ((instr >> 8) & 0xF) * 2;
+        if (rotate != 0) {
+            operand2 = (imm >> rotate) | (imm << (32 - rotate));
+            shift_carry = (operand2 >> 31) & 1;
+        } else {
+            operand2 = imm;
+        }
+    } else {
+        uint8_t rm = instr & 0xF;
+        operand2 = cpu->r[rm];
+        ShiftType shift_type = (ShiftType)((instr >> 5) & 0x3);
+        uint8_t shift_amount;
+
+        if (instr & (1 << 4)) {
+            uint8_t rs = (instr >> 8) & 0xF;
+            shift_amount = cpu->r[rs] & 0xFF;
+            operand2 = barrel_shift(operand2, shift_type, shift_amount, &shift_carry, false);
+        } else {
+            shift_amount = (instr >> 7) & 0x1F;
+            operand2 = barrel_shift(operand2, shift_type, shift_amount, &shift_carry, true);
+        }
+    }
+
+    uint32_t op1 = cpu->r[rn];
+    uint32_t result = 0;
+    bool carry = false, overflow = false;
+    bool write_result = true;
+    bool logical_op = false;
+
+    switch (opcode) {
+        case 0x0: result = op1 & operand2; logical_op = true; break;
+        case 0x1: result = op1 ^ operand2; logical_op = true; break;
+        case 0x2: result = alu_sub(op1, operand2, &carry, &overflow); break;
+        case 0x3: result = alu_sub(operand2, op1, &carry, &overflow); break;
+        case 0x4: result = alu_add(op1, operand2, &carry, &overflow); break;
+        case 0x5: result = alu_adc(op1, operand2, arm7_get_flag_c(cpu), &carry, &overflow); break;
+        case 0x6: result = alu_sbc(op1, operand2, arm7_get_flag_c(cpu), &carry, &overflow); break;
+        case 0x7: result = alu_sbc(operand2, op1, arm7_get_flag_c(cpu), &carry, &overflow); break;
+        case 0x8: result = op1 & operand2; write_result = false; logical_op = true; break;
+        case 0x9: result = op1 ^ operand2; write_result = false; logical_op = true; break;
+        case 0xA: result = alu_sub(op1, operand2, &carry, &overflow); write_result = false; break;
+        case 0xB: result = alu_add(op1, operand2, &carry, &overflow); write_result = false; break;
+        case 0xC: result = op1 | operand2; logical_op = true; break;
+        case 0xD: result = operand2; logical_op = true; break;
+        case 0xE: result = op1 & ~operand2; logical_op = true; break;
+        case 0xF: result = ~operand2; logical_op = true; break;
+    }
+
+    if (write_result) cpu->r[rd] = result;
+
+    if (set_flags) {
+        arm7_set_flag_n(cpu, (result >> 31) & 1);
+        arm7_set_flag_z(cpu, result == 0);
+        if (logical_op) {
+            arm7_set_flag_c(cpu, shift_carry);
+        } else {
+            arm7_set_flag_c(cpu, carry);
+            arm7_set_flag_v(cpu, overflow);
+        }
+    }
+}
+
+// ============================================================================
+// ARM7 - Branch
+// ============================================================================
+
+static void arm7_branch(ARM7* cpu, uint32_t instr) {
+    int32_t offset = instr & 0x00FFFFFF;
+    if (offset & 0x00800000) offset |= 0xFF000000;
+    offset <<= 2;
+
+    if (instr & (1 << 24)) {
+        cpu->r[14] = cpu->r[15] - 4;
+    }
+    cpu->r[15] = cpu->r[15] + offset;
+}
+
+// ============================================================================
+// ARM7 - Branch Exchange
+// ============================================================================
+
+static void arm7_branch_exchange(ARM7* cpu, uint32_t instr) {
+    uint8_t rm = instr & 0xF;
+    uint32_t addr = cpu->r[rm];
+
+    if (addr & 1) {
+        cpu->cpsr |= FLAG_T;
+        cpu->r[15] = addr & ~1;
+    } else {
+        cpu->cpsr &= ~FLAG_T;
+        cpu->r[15] = addr & ~3;
+    }
+}
+
+// ============================================================================
+// ARM7 - Load/Store
+// ============================================================================
+
+static void arm7_load_store(ARM7* cpu, uint32_t instr) {
+    bool immediate = ! ((instr >> 25) & 1);
+    bool pre_index = (instr >> 24) & 1;
+    bool add = (instr >> 23) & 1;
+    bool byte_transfer = (instr >> 22) & 1;
+    bool write_back = (instr >> 21) & 1;
+    bool is_load = (instr >> 20) & 1;
+
+    uint8_t rn = (instr >> 16) & 0xF;
+    uint8_t rd = (instr >> 12) & 0xF;
+
+    uint32_t base = cpu->r[rn];
+    uint32_t offset;
+
+    if (immediate) {
+        offset = instr & 0xFFF;
+    } else {
+        uint8_t rm = instr & 0xF;
+        offset = cpu->r[rm];
+        ShiftType shift_type = (ShiftType)((instr >> 5) & 0x3);
+        uint8_t shift_amount = (instr >> 7) & 0x1F;
+        bool dummy;
+        offset = barrel_shift(offset, shift_type, shift_amount, &dummy, true);
+    }
+
+    uint32_t addr = add ? (base + offset) : (base - offset);
+    uint32_t effective_addr = pre_index ? addr : base;
+
+    if (is_load) {
+        if (byte_transfer) {
+            cpu->r[rd] = memory_read8(cpu->memory, effective_addr);
+        } else {
+            cpu->r[rd] = memory_read32(cpu->memory, effective_addr);
+        }
+    } else {
+        if (byte_transfer) {
+            memory_write8(cpu->memory, effective_addr, cpu->r[rd] & 0xFF);
+        } else {
+            memory_write32(cpu->memory, effective_addr, cpu->r[rd]);
+        }
+    }
+
+    if (! pre_index || write_back) {
+        cpu->r[rn] = addr;
+    }
+}
+
+// ============================================================================
+// ARM7 - Execute ARM Instruction (MAIN)
+// ============================================================================
+
+void execute_arm_arm7(ARM7* cpu, uint32_t instr) {
+    uint8_t cond = (instr >> 28) & 0xF;
+    if (! check_condition_arm7(cpu, cond)) return;
+
+    // Branch Exchange
+    if ((instr & 0x0FFFFFF0) == 0x012FFF10) {
+        arm7_branch_exchange(cpu, instr);
+        return;
+    }
+
+    // Branch
+    if ((instr & 0x0E000000) == 0x0A000000) {
+        arm7_branch(cpu, instr);
+        return;
+    }
+
+    // Load/Store
+    if ((instr & 0x0C000000) == 0x04000000) {
+        arm7_load_store(cpu, instr);
+        return;
+    }
+
+    // Data Processing
+    if ((instr & 0x0C000000) == 0x00000000) {
+        arm7_data_processing(cpu, instr);
+        return;
+    }
+}
+
+// ============================================================================
+// ARM7 - Execute THUMB Instruction
+// ============================================================================
+
 void execute_thumb_arm7(ARM7* cpu, uint16_t instr) {
-    // Per ora usa la stessa logica di ARM9 (semplificato)
+    // Format 1: Move shifted register
+    if ((instr & 0xE000) == 0x0000 && ((instr >> 11) & 0x3) != 3) {
+        uint8_t op = (instr >> 11) & 0x3;
+        uint8_t offset = (instr >> 6) & 0x1F;
+        uint8_t rs = (instr >> 3) & 0x7;
+        uint8_t rd = instr & 0x7;
 
-    (void)cpu;
-    (void)instr;
+        bool carry = arm7_get_flag_c(cpu);
+        uint32_t result = barrel_shift(cpu->r[rs], (ShiftType)op, offset, &carry, true);
+        cpu->r[rd] = result;
 
-    // TODO: Implementare le istruzioni THUMB per ARM7
-    // Per ora è un placeholder che non fa nulla
-    // Implementazione semplificata - stessa logica dell
+        arm7_set_flag_n(cpu, (result >> 31) & 1);
+        arm7_set_flag_z(cpu, result == 0);
+        arm7_set_flag_c(cpu, carry);
+        return;
+    }
+
+    // Format 3: Move/Compare/Add/Subtract immediate
+    if ((instr & 0xE000) == 0x2000) {
+        uint8_t op = (instr >> 11) & 0x3;
+        uint8_t rd = (instr >> 8) & 0x7;
+        uint8_t imm = instr & 0xFF;
+
+        bool carry, overflow;
+        uint32_t result;
+
+        switch (op) {
+            case 0: // MOV
+                cpu->r[rd] = imm;
+                arm7_set_flag_n(cpu, 0);
+                arm7_set_flag_z(cpu, imm == 0);
+                break;
+            case 1: // CMP
+                result = alu_sub(cpu->r[rd], imm, &carry, &overflow);
+                arm7_set_flag_n(cpu, (result >> 31) & 1);
+                arm7_set_flag_z(cpu, result == 0);
+                arm7_set_flag_c(cpu, carry);
+                arm7_set_flag_v(cpu, overflow);
+                break;
+            case 2: // ADD
+                result = alu_add(cpu->r[rd], imm, &carry, &overflow);
+                cpu->r[rd] = result;
+                arm7_set_flag_n(cpu, (result >> 31) & 1);
+                arm7_set_flag_z(cpu, result == 0);
+                arm7_set_flag_c(cpu, carry);
+                arm7_set_flag_v(cpu, overflow);
+                break;
+            case 3: // SUB
+                result = alu_sub(cpu->r[rd], imm, &carry, &overflow);
+                cpu->r[rd] = result;
+                arm7_set_flag_n(cpu, (result >> 31) & 1);
+                arm7_set_flag_z(cpu, result == 0);
+                arm7_set_flag_c(cpu, carry);
+                arm7_set_flag_v(cpu, overflow);
+                break;
+        }
+        return;
+    }
+
+    // Format 18: Unconditional branch
+    if ((instr & 0xF800) == 0xE000) {
+        int32_t offset = instr & 0x7FF;
+        if (offset & 0x400) offset |= 0xFFFFF800;
+        cpu->r[15] += (offset << 1);
+        return;
+    }
 }
