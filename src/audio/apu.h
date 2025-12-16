@@ -2,7 +2,7 @@
 #define APU_H
 
 #include <stdint.h>
-#include <stdbool. h>
+#include <stdbool.h>
 #include <SDL.h>
 
 // Forward declaration
